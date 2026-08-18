@@ -1,0 +1,83 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - "twa-manifest.json"
+      - ".github/workflows/build-apk.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Bubblewrap CLI
+        run: npm install -g @bubblewrap/cli
+
+      - name: Pre-configure Bubblewrap (skip JDK/SDK install prompts)
+        run: |
+          mkdir -p ~/.bubblewrap
+          cat > ~/.bubblewrap/config.json << EOF
+          {"jdkPath": "$JAVA_HOME", "androidSdkPath": "$ANDROID_HOME"}
+          EOF
+          cat ~/.bubblewrap/config.json
+
+      - name: Generate signing key
+        run: |
+          keytool -genkeypair -v \
+            -keystore android.keystore \
+            -alias zapys \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass zapys12345 -keypass zapys12345 \
+            -dname "CN=Zapys App, OU=Zapys, O=Zapys, L=Kyiv, S=Kyiv, C=UA"
+
+      - name: Generate Android project from twa-manifest.json
+        run: |
+          bubblewrap update --skipVersionUpgrade
+
+      - name: Build APK with Bubblewrap
+        env:
+          BUBBLEWRAP_KEYSTORE_PASSWORD: zapys12345
+          BUBBLEWRAP_KEY_PASSWORD: zapys12345
+        run: |
+          printf 'n\n' | bubblewrap build --skipPwaValidation
+
+      - name: Rename APK
+        run: mv app-release-signed.apk zapys.apk
+
+      - name: Upload APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zapys-apk
+          path: zapys.apk
+
+      - name: Publish APK to a GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: "Zapys APK build ${{ github.run_number }}"
+          files: zapys.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
